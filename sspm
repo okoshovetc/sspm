@@ -3,11 +3,16 @@
 set -euo pipefail
 
 SSPM_DEBUG="${SSPM_DEBUG:-}"
+SSPM_PACKAGE_NAME=""
+SSPM_PACKAGE_FILE=""
+SSPM_DEFAULT_VERSION="0.1"
+SSPM_DUMMY_PACKAGE='dummy'
+SSPM_FORCE=""
 
 SSPM_CHECK_DEPENDENCIES="${SSPM_CHECK_DEPENDENCIES:-1}"
 DEBUG_INFO="$(printf '[%6d:%s]' "$$" "$USER")"
 
-COMMON_DEPENDENCIES=(base64 cat sed printf mkdir sleep hexdump strings uname sed sort tar)
+COMMON_DEPENDENCIES=(base64 cat sed printf mkdir sleep hexdump strings uname sed sort tar basename)
 OS=$(uname -s)
 
 function _echo {
@@ -101,6 +106,25 @@ function split {
 	done
 }
 
+function _new_package {
+	local name="$1"
+	if [ -z "$name" ]; then
+		name=$(basename "$PWD")
+	fi
+
+	SSPM_PACKAGE_NAME="$name"
+	local pkg="$name.sspm"
+	SSPM_PACKAGE_FILE="$pkg"
+	_echo "$pkg"
+}
+
+function _add_meta {
+	local meta="$1"
+	local value="$2"
+
+	_echo "$meta=$value" >> "$SSPM_PACKAGE_FILE"
+}
+
 # PREAMBLE Welcome to
 # PREAMBLE 
 # PREAMBLE    __________ ____  __  ___
@@ -161,6 +185,32 @@ function check_dependencies {
 	done
 }
 
+# AUTODOC common 
+# AUTODOC new sspm n|new ?[PACKAGE_NAME]
+# AUTODOC new 	creates new package
+# AUTODOC new 	if PACKAGE_NAME is not given, it uses current's directory basename
+# AUTODOC new 	default package version is 0.1
+function run_new {
+	local pkg="$1"
+	_new_package "$pkg" 1>/dev/null
+	debug "pkg='$SSPM_PACKAGE_FILE'"
+
+	# TODO implement --force
+	if [ -f "$SSPM_PACKAGE_FILE" ]; then
+		if [ -z "$SSPM_FORCE" ]; then
+			error "'$SSPM_PACKAGE_FILE' file is already present, remove it or use --force flag to recreate package"
+		else
+			rm "$SSPM_PACKAGE_FILE"
+			touch "$SSPM_PACKAGE_FILE"
+		fi
+	fi
+
+	_add_meta Name    "$SSPM_PACKAGE_NAME"
+	_add_meta Version "$SSPM_DEFAULT_VERSION"
+	_add_meta Type    "$SSPM_DUMMY_PACKAGE"
+	_echo "$SSPM_PACKAGE_NAME"
+}
+
 COMMAND=""
 KEY=""
 VALUE=""
@@ -172,6 +222,10 @@ while [[ $# -gt 0 ]]; do
 	case $option in
 		-d|--debug)
 			SSPM_DEBUG=1
+			shift
+			;;
+		-f|--force)
+			SSPM_FORCE=1
 			shift
 			;;
 		*)
@@ -186,42 +240,13 @@ fi
 GIVEN_COMMAND="${1:-}"
 
 case "$GIVEN_COMMAND" in
-	a|add|d|del|delete|g|get|c|check|s|set)
-		KEY="${2:-}"
-		if [ -z "$KEY" ]; then
-			error "KEY can't be empty"
+	n|new)
+		COMMAND="new"
+		if [ "$#" -gt 0 ]; then
+			KEY="$2"
+			shift
 		fi
-		case "$GIVEN_COMMAND" in
-			a|add|s|set)
-				case "$GIVEN_COMMAND" in
-					a|add)
-						COMMAND="add";;
-					s|set)
-						COMMAND="set";;
-				esac
-
-				if [ -z "${3+x}" ]; then
-					error "VALUE is undefined"
-				else
-					VALUE="$3"
-					shift
-					shift
-					shift
-				fi
-				;;
-			d|del|delete)
-				COMMAND="del"
-				shift
-				shift;;
-			g|get)
-				COMMAND="get"
-				shift
-				shift;;
-			c|check)
-				COMMAND="check"
-				shift
-				shift;;
-		esac;;
+		shift;;
 	l|list)
 		COMMAND="list"
 		shift;;
@@ -262,6 +287,8 @@ fi
 case "$COMMAND" in
 	help)
 		print_help "$KEY";;
+	new)
+		run_new "$KEY";;
 	depcheck)
 		check_dependencies;;
 	*)
