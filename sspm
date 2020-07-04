@@ -1,0 +1,269 @@
+#!/bin/bash
+
+set -euo pipefail
+
+SSPM_DEBUG="${SSPM_DEBUG:-}"
+
+SSPM_CHECK_DEPENDENCIES="${SSPM_CHECK_DEPENDENCIES:-1}"
+DEBUG_INFO="$(printf '[%6d:%s]' "$$" "$USER")"
+
+COMMON_DEPENDENCIES=(base64 cat sed printf mkdir sleep hexdump strings uname sed sort tar)
+OS=$(uname -s)
+
+function _echo {
+	printf '%s\n' "${1:-}"
+}
+
+function _base64 {
+	case "$OS" in
+		Darwin)
+			base64;;
+		*)
+			base64 -w 0;;
+	esac
+}
+
+function _sed {
+	case "$OS" in
+		Darwin)
+			local sed_args=()
+			local inplace=''
+			while [[ $# -gt 0 ]]; do
+				arg="$1"
+				debug "sedARG=$arg"
+				if [ "$arg" == '-i' ]; then
+					inplace="$2"
+					shift
+				else
+					sed_args+=("$1")
+				fi
+				shift
+			done
+
+			if [ -z "$inplace" ]; then
+				sed "${sed_args[@]}"
+			else
+				local newfile="${inplace}.inplace"
+				sed "${sed_args[@]}" <"$inplace" > "$newfile"
+				mv -f "$newfile" "$inplace"
+			fi;;
+		*)
+			sed "$@";;
+	esac
+}
+
+function _escape {
+	_echo "$1" | _sed 's/[^a-zA-Z 0-9]/\\&/g'
+}
+
+function _sort {
+	LC_ALL=C LC_COLLATE=C sort "$@"
+}
+
+function _log_prefix {
+	local level="$1"
+	local _caller
+	_caller="$(caller 2)"
+	_caller=($_caller)
+	printf '[%s:%s:%s]\t' "$level" "${_caller[0]}" "${_caller[1]}"
+	# printf '%s\t[%s:%s:%s]\t' "$(date '+%Y-%m-%dT%H:%M:%S')" "$level" "${_caller[0]}" "${_caller[1]}"
+}
+
+function _log {
+	local level="$1"
+	local msg="$2"
+	_echo "$(_log_prefix "$level")${msg}" 1>&2
+}
+
+function debug {
+	if [ -n "$SSPM_DEBUG" ]; then
+		_log 'debug' "$DEBUG_INFO  $*"
+	fi
+}
+
+function warn {
+	_log 'warning' "$*"
+}
+
+function error {
+	_log 'error' "$*"
+
+	exit 127
+}
+
+function split {
+	local del="$1"
+	local str="$2"
+	local IFS="$del"
+	read -ra arr <<< "$str"
+	for e in "${arr[@]}"; do
+		_echo "$e"
+	done
+}
+
+# PREAMBLE Welcome to
+# PREAMBLE 
+# PREAMBLE    __________ ____  __  ___
+# PREAMBLE   / ___/ ___// __ \/  |/  /
+# PREAMBLE   \__ \\__ \/ /_/ / /|_/ /
+# PREAMBLE  ___/ /__/ / ____/ /  / /
+# PREAMBLE /____/____/_/   /_/  /_/
+# PREAMBLE 
+# PREAMBLE 
+# PREAMBLE SSPM stands for Supremely Stupid Package Manager
+# PREAMBLE The main concept of this 'Package Manager' is
+# PREAMBLE 	1) Being written in bash
+# PREAMBLE 	2) Being written in as clean bash as possible
+# PREAMBLE 	3) Being written in single bash file
+# PREAMBLE 	4) Forming non-binary packages that can be easily fixed in vim if needed
+# PREAMBLE 
+# PREAMBLE The syntax is simple
+# AUTODOC common 
+# AUTODOC common sspm [OPTIONS] COMMAND [COMMAND_ARGS]
+# AUTODOC common 
+# AUTODOC common configurable options are
+# AUTODOC common 
+# AUTODOC common 	-d|--debug
+# AUTODOC common 		use debug
+# AUTODOC common 		can also be configured with SSPM_DEBUG env option
+# AUTODOC common 
+# AUTODOC common almost every command has a shorter version for comfortable usage in console
+# AUTODOC common 
+# AUTODOC help sspm help [COMMAND]
+# AUTODOC help sspm h
+# AUTODOC help 	prints this help
+# AUTODOC help 	if COMMAND is given, it prints only help for specific COMMAND
+# AUTODOC help 	COMMAND should be full ('sspm help new' will work, but 'sspm help n' will not)
+# MILESTONES 
+# MILESTONES Roadmaps are
+# MILESTONES 	1) Packing single files
+# MILESTONES 	2) Packing directories
+# MILESTONES 	3) Storing installed packages in ssdb
+function print_help {
+	helpfor="${1:-}"
+	if [ -z "$helpfor" ]; then
+		grep '^# PREAMBLE' "$0" | _sed "s/^# PREAMBLE //g"
+		grep '^# AUTODOC' sspm | _sed -e "s/^# AUTODOC [^ ]* //g"
+		grep '^# MILESTONES' "$0" | _sed -e "s/^# MILESTONES //g"
+	else
+		grep "^# AUTODOC $helpfor" "$0" | _sed -e "s/^# AUTODOC [^ ]* //g"
+	fi
+}
+
+# AUTODOC common 
+# AUTODOC depcheck sspm dep|depcheck
+# AUTODOC depcheck 	checks external dependecies
+function check_dependencies {
+	for dep in "${COMMON_DEPENDENCIES[@]}"; do
+		if ! type "$dep" 1>/dev/null 2>/dev/null; then
+			error "Unmet dependency: $dep"
+		fi
+	done
+}
+
+COMMAND=""
+KEY=""
+VALUE=""
+
+while [[ $# -gt 0 ]]; do
+	option="$1"
+	debug "parsing $option"
+
+	case $option in
+		-d|--debug)
+			SSPM_DEBUG=1
+			shift
+			;;
+		*)
+			break;;
+	esac
+done
+
+if [ "$SSPM_CHECK_DEPENDENCIES" -ne 0 ]; then
+	check_dependencies
+fi
+
+GIVEN_COMMAND="${1:-}"
+
+case "$GIVEN_COMMAND" in
+	a|add|d|del|delete|g|get|c|check|s|set)
+		KEY="${2:-}"
+		if [ -z "$KEY" ]; then
+			error "KEY can't be empty"
+		fi
+		case "$GIVEN_COMMAND" in
+			a|add|s|set)
+				case "$GIVEN_COMMAND" in
+					a|add)
+						COMMAND="add";;
+					s|set)
+						COMMAND="set";;
+				esac
+
+				if [ -z "${3+x}" ]; then
+					error "VALUE is undefined"
+				else
+					VALUE="$3"
+					shift
+					shift
+					shift
+				fi
+				;;
+			d|del|delete)
+				COMMAND="del"
+				shift
+				shift;;
+			g|get)
+				COMMAND="get"
+				shift
+				shift;;
+			c|check)
+				COMMAND="check"
+				shift
+				shift;;
+		esac;;
+	l|list)
+		COMMAND="list"
+		shift;;
+	snap)
+		COMMAND="snap"
+		shift;;
+	bindump)
+		COMMAND="bindump"
+		shift;;
+	truncate)
+		COMMAND="truncate"
+		shift;;
+	dep|depcheck)
+		COMMAND="depcheck"
+		shift;;
+	h|help)
+		COMMAND="help"
+		shift
+		if [[ $# -eq 1 ]]; then
+			KEY="$1";
+			shift
+		else
+			KEY=""
+		fi
+		;;
+	'')
+		error "No command given, consider running 'sspm help'";;
+	*)
+		error "'$GIVEN_COMMAND' command is unknown, consider running 'sspm help'";;
+esac
+
+debug "COMMAND=$COMMAND KEY=$KEY VALUE=$VALUE"
+
+if [[ $# -gt 0 ]]; then
+	error 'extra params left, usage sspm [OPTIONS] COMMAND ?ARG1 ?ARG2'
+fi
+
+case "$COMMAND" in
+	help)
+		print_help "$KEY";;
+	depcheck)
+		check_dependencies;;
+	*)
+		error "'$COMMAND' command is parsed but not implemented yet";;
+esac
